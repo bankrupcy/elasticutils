@@ -1389,11 +1389,13 @@ class S(PythonMixin):
             if action == 'indexes':
                 return list(value)
 
-        if self.type is not None:
+        try:
             indexes = self.type.get_index()
             if isinstance(indexes, basestring):
                 indexes = [indexes]
             return indexes
+        except (NotImplementedError, AttributeError):
+            pass
 
         return default_indexes
 
@@ -1403,8 +1405,10 @@ class S(PythonMixin):
             if action == 'doctypes':
                 return list(value)
 
-        if self.type is not None:
+        try:
             return [self.type.get_mapping_type_name()]
+        except (NotImplementedError, AttributeError):
+            pass
 
         return default_doctypes
 
