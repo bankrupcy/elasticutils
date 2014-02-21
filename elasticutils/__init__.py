@@ -31,12 +31,13 @@ QUERY_ACTION_MAP = {
     'text_phrase': 'text_phrase',
     'match': 'match',  # ES 0.19.9 renamed text to match
     'match_phrase': 'match_phrase',
+    'match_phrase_prefix': 'match_phrase_prefix',
     'wildcard': 'wildcard',
     'fuzzy': 'fuzzy'}
 
 
 #: List of text/match actions.
-TEXTMATCH_ACTIONS = ['text', 'text_phrase', 'match', 'match_phrase']
+TEXTMATCH_ACTIONS = ['text', 'text_phrase', 'match', 'match_phrase', 'match_phrase_prefix', ]
 #: List of range actions.
 RANGE_ACTIONS = ['gt', 'gte', 'lt', 'lte']
 
