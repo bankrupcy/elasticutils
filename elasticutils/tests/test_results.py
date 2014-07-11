@@ -52,20 +52,13 @@ class FakeMappingType(MappingType):
 
 
 class TestResultsWithData(ESTestCase):
-    @classmethod
-    def setup_class(cls):
-        super(TestResultsWithData, cls).setup_class()
-        if cls.skip_tests:
-            return
-
-        cls.create_index()
-        cls.index_data([
-                {'id': 1, 'foo': 'bar', 'tag': 'awesome', 'width': '2'},
-                {'id': 2, 'foo': 'bart', 'tag': 'boring', 'width': '7'},
-                {'id': 3, 'foo': 'car', 'tag': 'awesome', 'width': '5'},
-                {'id': 4, 'foo': 'duck', 'tag': 'boat', 'width': '11'},
-                {'id': 5, 'foo': 'train car', 'tag': 'awesome', 'width': '7'}
-            ])
+    data = [
+        {'id': 1, 'foo': 'bar', 'tag': 'awesome', 'width': '2'},
+        {'id': 2, 'foo': 'bart', 'tag': 'boring', 'width': '7'},
+        {'id': 3, 'foo': 'car', 'tag': 'awesome', 'width': '5'},
+        {'id': 4, 'foo': 'duck', 'tag': 'boat', 'width': '11'},
+        {'id': 5, 'foo': 'train car', 'tag': 'awesome', 'width': '7'}
+    ]
 
     @classmethod
     def teardown_class(cls):
@@ -94,7 +87,9 @@ class TestResultsWithData(ESTestCase):
         assert isinstance(searcher[0], tuple)
         # We sort the result and expected result here so that the
         # order is stable and comparable.
-        eq_(sorted(searcher[0]), sorted((u'2', u'bar', u'awesome', 1)))
+        eq_(
+            sorted(searcher[0], key=str),
+            sorted((u'2', u'bar', u'awesome', 1), key=str))
 
     def test_values_list_results(self):
         """With values_list fields, returns list of tuples."""
@@ -106,44 +101,47 @@ class TestResultsWithData(ESTestCase):
         """Test default results form has metadata."""
         searcher = list(self.get_s().query(foo='bar'))
         assert hasattr(searcher[0], '_id')
-        assert hasattr(searcher[0], '_score')
-        assert hasattr(searcher[0], '_source')
-        assert hasattr(searcher[0], '_type')
-        assert hasattr(searcher[0], '_explanation')
-        assert hasattr(searcher[0], '_highlight')
+        assert hasattr(searcher[0].es_meta, 'id')
+        assert hasattr(searcher[0].es_meta, 'score')
+        assert hasattr(searcher[0].es_meta, 'source')
+        assert hasattr(searcher[0].es_meta, 'type')
+        assert hasattr(searcher[0].es_meta, 'explanation')
+        assert hasattr(searcher[0].es_meta, 'highlight')
 
     def test_values_list_form_has_metadata(self):
         """Test default results form has metadata."""
         searcher = list(self.get_s().query(foo='bar').values_list('id'))
         assert hasattr(searcher[0], '_id')
-        assert hasattr(searcher[0], '_score')
-        assert hasattr(searcher[0], '_source')
-        assert hasattr(searcher[0], '_type')
-        assert hasattr(searcher[0], '_explanation')
-        assert hasattr(searcher[0], '_highlight')
+        assert hasattr(searcher[0].es_meta, 'id')
+        assert hasattr(searcher[0].es_meta, 'score')
+        assert hasattr(searcher[0].es_meta, 'source')
+        assert hasattr(searcher[0].es_meta, 'type')
+        assert hasattr(searcher[0].es_meta, 'explanation')
+        assert hasattr(searcher[0].es_meta, 'highlight')
 
     def test_values_dict_form_has_metadata(self):
         """Test default results form has metadata."""
         searcher = list(self.get_s().query(foo='bar').values_dict())
         assert hasattr(searcher[0], '_id')
-        assert hasattr(searcher[0], '_score')
-        assert hasattr(searcher[0], '_source')
-        assert hasattr(searcher[0], '_type')
-        assert hasattr(searcher[0], '_explanation')
-        assert hasattr(searcher[0], '_highlight')
+        assert hasattr(searcher[0].es_meta, 'id')
+        assert hasattr(searcher[0].es_meta, 'score')
+        assert hasattr(searcher[0].es_meta, 'source')
+        assert hasattr(searcher[0].es_meta, 'type')
+        assert hasattr(searcher[0].es_meta, 'explanation')
+        assert hasattr(searcher[0].es_meta, 'highlight')
 
     def test_values_dict_no_args(self):
         """Calling values_dict() with no args fetches all fields."""
         eq_(S().query(fld1=2)
                .values_dict()
-               ._build_query(),
+               .build_search(),
             {"query": {"term": {"fld1": 2}}})
 
     def test_values_list_no_args(self):
         """Calling values() with no args fetches only id."""
         eq_(S().query(fld1=2)
                .values_list()
-               ._build_query(),
+               .build_search(),
             {'query': {"term": {"fld1": 2}}})
 
 
@@ -158,18 +156,12 @@ class TestFakeMappingType(ESTestCase):
     @classmethod
     def setup_class(cls):
         super(TestFakeMappingType, cls).setup_class()
-        if cls.skip_tests:
-            return
-
         for doc in cls.data:
             FakeModel(**doc)
 
     @classmethod
     def teardown_class(cls):
         super(TestFakeMappingType, cls).setup_class()
-        if cls.skip_tests:
-            return
-
         reset_model_cache()
 
     def test_object(self):
@@ -181,6 +173,7 @@ class TestFakeMappingType(ESTestCase):
 class TestResultsWithDates(ESTestCase):
     def test_dates(self):
         """Datetime strings in ES results get converted to Python datetimes"""
+        self.cleanup_index()
         self.create_index(
             settings={
                 'mappings': {
@@ -209,6 +202,7 @@ class TestResultsWithDates(ESTestCase):
 
     def test_dates_lookalikes(self):
         """Datetime strings in ES results get converted to Python datetimes"""
+        self.cleanup_index()
         self.create_index(
             settings={
                 'mappings': {
@@ -233,17 +227,21 @@ class TestResultsWithDates(ESTestCase):
 
 
 class TestMappingType(ESTestCase):
+    def setUp(self):
+        super(TestMappingType, self).setUp()
+        self.cleanup_index()
+        self.create_index()
+
     def tearDown(self):
+        self.cleanup_index()
         super(TestMappingType, self).tearDown()
-        self.__class__.cleanup_index()
 
     def test_default_mapping_type(self):
         data = [
             {'id': 1, 'name': 'Alice'}
         ]
 
-        self.__class__.create_index()
-        self.__class__.index_data(data)
+        self.index_data(data)
         s = self.get_s(DefaultMappingType)
         result = list(s)[0]
 
@@ -254,10 +252,9 @@ class TestMappingType(ESTestCase):
     def test_mapping_type_attribute_override(self):
         data = [
             {'id': 1, '_object': 'foo'}
-            ]
+        ]
 
-        self.__class__.create_index()
-        self.__class__.index_data(data)
+        self.index_data(data)
         s = self.get_s(DefaultMappingType)
         result = list(s)[0]
 

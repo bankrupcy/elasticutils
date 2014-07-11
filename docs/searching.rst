@@ -95,8 +95,9 @@ For example::
 
     some_s = S()
 
-    results = some_s[:10]    # returns first 10 results
-    results = some_s[10:20]  # returns results 10 through 19
+    results = list(some_s)         # returns first 10 results (default)
+    results = list(some_s[:10])    # returns first 10 results
+    results = list(some_s[10:20])  # returns results 10 through 19
 
 
 The slicing is chainable, too::
@@ -110,6 +111,34 @@ The slicing is chainable, too::
    The slicing happens on the Elasticsearch side---it doesn't pull all
    the results back and then slice them in Python. Ew.
 
+
+.. Note::
+
+   Unlike slicing other things in Python, if you choose a start, but
+   no end, then you get 10 results starting with the start.
+
+   In other words, this::
+
+       some_s = S()[10:]
+
+   does **not** give you all the results from index 10 onwards. Instead
+   it gives you results 10 through 19.
+
+   If you want "all the results from index 10 onwards", then you could
+   do something like this::
+
+       SOME_LARGE_NUMBER = 1000000
+       some_s = S()[10:SOME_LARGE_NUMBER]
+
+   If you know you have fewer results than ``SOME_LARGE_NUMBER`` or you
+   could do this which will kick off two Elasticsearch queries::
+
+       some_s = S()[10:some_s.count()]
+
+   Note that doing open-ended queries like this has the same
+   ramifications as calling
+   :py:meth:`elasticutils.S.everything`. Refer to that documentation
+   for the fearsome details.
 
 .. seealso::
 
@@ -125,7 +154,7 @@ The search won't execute until you do one of the following:
 1. use the :py:class:`elasticutils.S` in an iterable context
 2. call :py:func:`len` on a :py:class:`elasticutils.S`
 3. call the :py:meth:`elasticutils.S.execute`,
-   :py:meth:`elasticutils.S.all`,
+   :py:meth:`elasticutils.S.everything`,
    :py:meth:`elasticutils.S.count`,
    :py:meth:`elasticutils.S.suggestions` or
    :py:meth:`elasticutils.S.facet_counts` methods
@@ -143,8 +172,8 @@ S results can be returned in many shapes
 An `untyped S` (e.g. ``S()``) will return instances of
 :py:class:`elasticutils.DefaultMappingType` by default.
 
-A `typed S` (e.g. ``S(Foo)``), will return instances of that type
-(e.g. type ``Foo``) by default.
+A `typed S` (e.g. ``S(FooMappingType)``), will return instances of
+that type (e.g. type ``FooMappingType``) by default.
 
 :py:meth:`elasticutils.S.values_list` gives you a list of
 tuples. See documentation for more details.
@@ -201,6 +230,10 @@ This searches just "someindex"::
 This searches "thisindex" and "thatindex"::
 
     q = S().indexes('thisindex', 'thatindex')
+
+This searches whatever ``FooMappingType.get_index()`` returns::
+
+    q = S(FooMappingType)
 
 
 Specifying doctypes to search: ``doctypes``
@@ -269,23 +302,23 @@ trucks".
 
 There are many different field actions to choose from:
 
-======================  =========================
-field action            elasticsearch query type
-======================  =========================
+======================  ================================
+field action            Elasticsearch query type
+======================  ================================
 (no action specified)   Term query
 term                    Term query
 terms                   Terms query
-text                    Text query
+text                    Text query (`DEPRECATED`)
 match                   Match query [1]_
 prefix                  Prefix query [2]_
 gt, gte, lt, lte        Range query
 range                   Range query [4]_
 fuzzy                   Fuzzy query
 wildcard                Wildcard query
-text_phrase             Text phrase query
+text_phrase             Text phrase query (`DEPRECATED`)
 match_phrase            Match phrase query [1]_
 query_string            Querystring query [3]_
-======================  =========================
+======================  ================================
 
 
 .. [1] Elasticsearch 0.19.9 renamed text queries to match queries. If
@@ -373,7 +406,7 @@ You can alter this behavior by flagging your queries with ``should``,
 
 **must**
 
-    This is the default.
+    This is the default, so if you don't specify, then it's a `must`.
 
     A query added with ``must=True`` must match in order for the
     document to be in the result set.
@@ -576,7 +609,7 @@ The F class
 Suppose you want either Korean or Mexican food. For that, you need an
 "or". You can do something like this::
 
-   q = S().filter(or_={'style': 'korean', 'style'='mexican'})
+   q = S().filter(or_={'style': 'korean', 'style':'mexican'})
 
 
 But, wow---that's icky looking and not particularly helpful!
@@ -752,7 +785,7 @@ in :py:meth:`elasticutils.S.suggestions`:
 
 .. Note::
 
-   Spelling suggestions are only supported since Elasticsearch 0.90.
+   Spelling suggestions require Elasticsearch 0.90 or later.
 
 .. seealso::
 
@@ -787,14 +820,6 @@ The facet counts are available through
             .facet('style', 'location'))
     counts = q.facet_counts()
 
-You can also restrict the number of terms returned per facet by passing a ``size`` keyword argument to
-:py:meth:`elasticutils.S.facet`.
-
-::
-
-    q = S().query(title='taco trucks')
-            .facet('style', 'location', size=5)
-
 
 Also, you can get them with the ``facets`` attribute of the search results::
 
@@ -803,6 +828,13 @@ Also, you can get them with the ``facets`` attribute of the search results::
 
     results = q.execute()
     counts = results.facets
+
+You can also restrict the number of terms returned per facet by
+passing a ``size`` keyword argument to
+:py:meth:`elasticutils.S.facet`::
+
+    q = S().query(title='taco trucks')
+            .facet('style', 'location', size=5)
 
 
 .. seealso::
@@ -813,6 +845,63 @@ Also, you can get them with the ``facets`` attribute of the search results::
    http://www.elasticsearch.org/guide/reference/api/search/facets/terms-facet.html
      Elasticsearch docs on terms facet
 
+
+Facet Results
+-------------
+
+The execution methods :py:meth:`elasticutils.S.facet_counts` and
+:py:meth:`elasticutils.S.execute` will return a dictionary containing
+the named parameter and a :py:class:`elasticutils.FacetResult` object.
+
+For example::
+
+    >>> facet_counts = S().facet('primary_country_id').facet_counts()
+    >>> facet_counts
+    {u'primary_country_id': <elasticutils.FacetResult at 0x45f12d0>}
+
+
+The FacetResult object contains all of the information returned in the
+facet stanza.
+
+In the above case, we faceted on primary_country_id as a terms
+facet. To see the facet results simply iterate over the FacetResult
+object::
+
+    >>> for facet_result in facet_counts['primary_country_id']:
+    ...     print facet_result
+    ...
+    {u'count': 187293, u'term': 41}
+	{u'count': 24177, u'term': 9}
+	{u'count': 17200, u'term': 50}
+	{u'count': 13015, u'term': 15}
+	{u'count': 10296, u'term': 30}
+	{u'count': 8824, u'term': 32}
+	{u'count': 7703, u'term': 6}
+	{u'count': 7502, u'term': 23}
+	{u'count': 5614, u'term': 2}
+	{u'count': 5214, u'term': 33}
+
+And to get the "other", "missing" and "total" information from the
+facetresult::
+
+    >>> facet_counts['primary_country_id'].missing
+    3475
+
+    >>> facet_counts['primary_country_id'].other
+    25273
+
+    >>> facet_counts['primary_country_id'].total
+    312111
+
+
+FacetResult is backwords compatible with older versions of
+ElasticUtils, so you shouldn't need to change anything when
+upgrading::
+
+    >>> some_s = S().facet_raw(primary_country_id={'statistical':{"field":"primary_country_id"}})
+    >>> facet_counts = some_s.facet_counts()
+    >>> facet_counts['primary_country_id'].max == facet_counts['primary_country_id']['max']
+    True
 
 
 Facets and scope (filters and global)
@@ -954,23 +1043,24 @@ The same can be done with queries::
   http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/search-facets-filter-facet.html
     Elasticsearch docs on filter facets
 
+
 .. _scores-and-explanations:
 
 Scores and explanations
 =======================
 
-Seeing the score: _score
-------------------------
+Seeing the score
+----------------
 
 Wondering what the score for a document was? ElasticUtils puts that in
-the ``_score`` on the search result. For example, let's search an
-index that holds knowledge base articles for ones with the word
-"crash" in them and print out the scores::
+the ``score`` attribute of the ``es_meta`` object of the search result.
+For example, let's search an index that holds knowledge base articles
+for ones with the word "crash" in them and print out the scores::
 
     q = S().query(title__text='crash', content__text='crash')
 
     for result in q:
-        print result._score
+        print result.es_meta.score
 
 This works regardless of what form the search results are in.
 
@@ -983,8 +1073,8 @@ that should have shown up higher? Wonder how that score was computed?
 You can set the search to pass the ``explain`` flag to Elasticsearch
 with :py:meth:`elasticutils.S.explain`.
 
-This returns data that will be in every item in the search results
-list as ``_explanation``.
+ElasticUtils puts the explanation in the ``explanation`` attribute
+of the ``es_meta`` object of the search result.
 
 For example, let's do a query on a search corpus of knowledge base
 articles for articles with the word "crash" in them::
@@ -993,7 +1083,7 @@ articles for articles with the word "crash" in them::
             .explain())
 
     for result in q:
-        print result._explanation
+        print result.es_meta.explanation
 
 
 This works regardless of what form the search results are in.

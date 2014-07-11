@@ -2,14 +2,14 @@
  README
 ========
 
-elasticutils is a convenient Django-queryset-like API for querying
-Elastic Search.
+ElasticUtils is a convenient Django QuerySet-like API for querying
+Elasticsearch.
 
 
 Project details
 ===============
 
-:Code:           http://github.com/mozilla/elasticutils
+:Code:           https://github.com/mozilla/elasticutils
 :Documentation:  http://elasticutils.rtfd.org
 :Issue tracker:  https://github.com/mozilla/elasticutils/issues
 :IRC:            ``#elasticutils`` on irc.mozilla.org
@@ -37,3 +37,9 @@ Run the dev version (which is master tip)::
 
 That corresponds with
 `<http://github.com/mozilla/elasticutils/tarball/master#egg=elasticutils-dev>`_.
+
+
+Quick start
+===========
+
+See https://elasticutils.readthedocs.org/ for the quick start.

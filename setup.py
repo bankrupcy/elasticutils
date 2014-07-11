@@ -21,14 +21,15 @@ def get_version():
 setup(
     name='elasticutils',
     version=get_version(),
-    description='Chainable interface to querying Elasticsearch',
+    description='Chainable, iterative interface to querying Elasticsearch',
     long_description=open(READMEFILE).read(),
     url='https://github.com/mozilla/elasticutils',
     author='Mozilla Foundation and contributors',
     license='BSD',
     packages=find_packages(),
     install_requires=[
-        'elasticsearch>=0.4.3'
+        'elasticsearch >= 0.4.3, < 1.0',
+        'six'
     ],
     include_package_data=True,
     classifiers=[
@@ -38,8 +39,12 @@ setup(
         'License :: OSI Approved :: BSD License',
         'Operating System :: OS Independent',
         'Programming Language :: Python',
+        'Programming Language :: Python :: 2',
         'Programming Language :: Python :: 2.6',
         'Programming Language :: Python :: 2.7',
+        'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.3',
+        'Programming Language :: Python :: 3.4',
         'Topic :: Software Development :: Libraries :: Python Modules',
         'Natural Language :: English',
         ],

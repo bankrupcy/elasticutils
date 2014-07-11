@@ -4,21 +4,13 @@
  Installation
 ==============
 
-.. Warning::
-
-   ElasticUtils doesn't work well with Elasticsearch 0.19.9. Don't use
-   that version---newer or older versions are fine.
-
-   https://github.com/elasticsearch/elasticsearch/issues/2205
-     Elasticsearch bug with ``_all``.
-
-
 Requirements
 ============
 
 ElasticUtils requires:
 
-* elasticsearch >= 0.4.3
+* elasticsearch-py >= 0.4.3 < 1.0 and its dependencies
+* Elasticsearch >= 0.90
 
 
 Installation

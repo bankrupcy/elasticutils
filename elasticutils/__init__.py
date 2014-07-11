@@ -2,6 +2,8 @@ import copy
 import logging
 from datetime import datetime
 from operator import itemgetter
+import six
+from six import string_types
 
 from elasticsearch import Elasticsearch
 from elasticsearch.helpers import bulk_index
@@ -19,25 +21,35 @@ DEFAULT_INDEXES = None
 DEFAULT_TIMEOUT = 5
 
 
+#: Valid facet types
+FACET_TYPES = [
+    'date_histogram',
+    'filter',
+    'histogram',
+    'query',
+    'range',
+    'statistical',
+    'terms',
+]
+
 #: Maps ElasticUtils field actions to their Elasticsearch query names.
 QUERY_ACTION_MAP = {
     None: 'term',  # Default to term
     'in': 'in',
     'term': 'term',
     'terms': 'terms',
-    'startswith': 'prefix',  # Backwards compatability
     'prefix': 'prefix',
-    'text': 'text',
-    'text_phrase': 'text_phrase',
-    'match': 'match',  # ES 0.19.9 renamed text to match
+    'match': 'match',
     'match_phrase': 'match_phrase',
     'match_phrase_prefix': 'match_phrase_prefix',
     'wildcard': 'wildcard',
-    'fuzzy': 'fuzzy'}
+    'fuzzy': 'fuzzy'
+}
 
 
 #: List of text/match actions.
 TEXTMATCH_ACTIONS = ['text', 'text_phrase', 'match', 'match_phrase', 'match_phrase_prefix', ]
+
 #: List of range actions.
 RANGE_ACTIONS = ['gt', 'gte', 'lt', 'lte']
 
@@ -77,7 +89,7 @@ def _build_key(urls, timeout, **settings):
 
     # elasticsearch allows urls to be a string, so we make sure to
     # account for that when converting whatever it is into a tuple.
-    if isinstance(urls, basestring):
+    if isinstance(urls, string_types):
         urls = (urls,)
     else:
         urls = tuple(urls)
@@ -113,7 +125,7 @@ def get_es(urls=None, timeout=DEFAULT_TIMEOUT, force_new=False, **settings):
         object rather than pulling it from cache.
     :arg settings: other settings to pass into Elasticsearch
         constructor; See
-        `<http://elasticsearch.readthedocs.org/>`_ for more details.
+        `<http://elasticsearch-py.readthedocs.org/>`_ for more details.
 
     Examples::
 
@@ -172,10 +184,10 @@ def _process_facets(facets, flags):
     rv = {}
     for fieldname in facets:
         facet_type = {'terms': {'field': fieldname}}
-        if flags.get('global_'):
-            facet_type['global'] = flags['global_']
         if flags.get('size'):
             facet_type['terms']['size'] = flags['size']
+        if flags.get('global_'):
+            facet_type['global'] = flags['global_']
         elif flags.get('filtered'):
             # Note: This is an indicator that the facet_filter should
             # get filled in later when we know all the filters.
@@ -194,22 +206,39 @@ def _facet_counts(items):
 
     """
     facets = {}
-    for key, val in items:
-        if val['_type'] == 'terms':
-            facets[key] = [v for v in val['terms']]
-        elif val['_type'] == 'range':
-            facets[key] = [v for v in val['ranges']]
-        elif val['_type'] == 'histogram':
-            facets[key] = [v for v in val['entries']]
-        elif val['_type'] == 'date_histogram':
-            facets[key] = [v for v in val['entries']]
-        elif val['_type'] in ('filter', 'query', 'statistical'):
-            facets[key] = val
-        else:
-            raise InvalidFacetType(
-                'Facet _type "%s". key "%s" val "%r"' %
-                (val['_type'], key, val))
+    for name, data in items:
+        facets[name] = FacetResult(name, data)
     return facets
+
+
+class FacetResult(object):
+    def __init__(self, name, data, *args, **kwargs):
+        if data['_type'] not in FACET_TYPES:
+            raise InvalidFacetType(
+                'Facet _type "{0}". key "{1}" val "{2}"'.format(
+                    data['_type'], name, data))
+
+        self._data = data
+        self.__dict__.update(data)
+
+        for attr in ('entries', 'ranges', 'terms'):
+            if attr in data:
+                self.data = getattr(self, attr)[:]
+                break
+        else:
+            self.data = []
+
+    def __repr__(self):
+        return repr(self._data)
+
+    def __iter__(self):
+        return iter(self.data)
+
+    def __getitem__(self, key):
+        try:
+            return getattr(self, key)
+        except AttributeError as exc:
+            raise KeyError(exc.message)
 
 
 class F(object):
@@ -230,7 +259,10 @@ class F(object):
     """
     def __init__(self, **filters):
         """Creates an F"""
+
         filters = filters.items()
+        if six.PY3:
+            filters = list(filters)
         if len(filters) > 1:
             self.filters = [{'and': filters}]
         else:
@@ -297,17 +329,17 @@ class Q(object):
     example::
 
         q = Q()
-        q += Q(title__text='shoes')
-        q += Q(summary__text='shoes')
+        q += Q(title__match='shoes')
+        q += Q(summary__match='shoes')
 
     creates a BooleanQuery with two `must` clauses.
 
     Example 2::
 
         q = Q()
-        q += Q(title__text='shoes', should=True)
-        q += Q(summary__text='shoes')
-        q += Q(description__text='shoes', must=True)
+        q += Q(title__match='shoes', should=True)
+        q += Q(summary__match='shoes')
+        q += Q(description__match='shoes', must=True)
 
     creates a BooleanQuery with one `should` clause (title) and two
     `must` clauses (summary and description).
@@ -363,9 +395,9 @@ def _boosted_value(name, action, key, value, boost):
     """Boost a value if we should in _process_queries"""
     if boost is not None:
         # Note: Most queries use 'value' for the key name except
-        # Text/Match queries which use 'query'. So we have to do some
+        # Match queries which use 'query'. So we have to do some
         # switcheroo for that.
-        value_key = 'query' if action in TEXTMATCH_ACTIONS else 'value'
+        value_key = 'query' if action in MATCH_ACTIONS else 'value'
         return {name: {'boost': boost, value_key: value}}
     return {name: value}
 
@@ -389,7 +421,7 @@ class PythonMixin(object):
            This does the conversion in-place!
 
         """
-        if isinstance(obj, basestring):
+        if isinstance(obj, string_types):
             if len(obj) == 26:
                 try:
                     return datetime.strptime(obj, '%Y-%m-%dT%H:%M:%S.%f')
@@ -421,20 +453,27 @@ class S(PythonMixin):
 
     The API for `S` takes inspiration from Django's QuerySet.
 
-    `S` can be either typed or untyped. An untyped `S` returns dict
-    results by default.
+    `S` can be either typed or untyped. An untyped `S` returns results
+    as an iterable of :py:class:`elasticutils.DefaultMappingType`
+    instances.
 
     An `S` is lazy in the sense that it doesn't do an Elasticsearch
-    search request until it's forced to evaluate by either iterating
-    over it, calling ``.count``, doing ``len(s)``, or calling
-    ``.facet_count`` or ``.suggestions``.
+    search request until it's forced to evaluate by:
+
+    1. use the :py:class:`elasticutils.S` in an iterable context
+    2. call :py:func:`len` on a :py:class:`elasticutils.S`
+    3. call the :py:meth:`elasticutils.S.execute`,
+       :py:meth:`elasticutils.S.everything`,
+       :py:meth:`elasticutils.S.count`,
+       :py:meth:`elasticutils.S.suggestions` or
+       :py:meth:`elasticutils.S.facet_counts` methods
 
 
     **Adding support for other queries**
 
     You can add support for queries that S doesn't have support for by
-    subclassing S with a method called ``process_query_ACTION``.  This
-    method takes a key, value and an action.
+    subclassing S with a method called ``process_query_<ACTION>``.
+    This method takes a key, value and an action.
 
     For example::
 
@@ -473,7 +512,7 @@ class S(PythonMixin):
     **Adding support for other filters**
 
     You can add support for filters that S doesn't have support for by
-    subclassing S with a method called ``process_filter_ACTION``.
+    subclassing S with a method called ``process_filter_<ACTION>``.
     This method takes a key, value and an action.
 
     For example::
@@ -492,7 +531,7 @@ class S(PythonMixin):
     def __init__(self, type_=None):
         """Create and return an S.
 
-        :arg type_: class; the model that this S is based on
+        :arg type_: class; the MappingType for this S
 
         """
         self.type = type_
@@ -505,11 +544,11 @@ class S(PythonMixin):
 
     def __repr__(self):
         try:
-            return '<S {0}>'.format(repr(self._build_query()))
+            return '<S {0}>'.format(repr(self.build_search()))
         except RuntimeError:
-            # This happens when you're debugging _build_query and try
-            # to repr the instance you're calling it on. Then that
-            # calls _build_query and ...
+            # This can happen when you're debugging build_search() and
+            # try to repr the instance you're calling it on. Then that
+            # calls build_search() and CLOWN SHOES!
             return repr(self.steps)
 
     def _clone(self, next_step=None):
@@ -669,7 +708,7 @@ class S(PythonMixin):
 
         >>> s = S().query(foo='bar')
         >>> s = S().query(Q(foo='bar'))
-        >>> s = S().query(foo='bar', bat__text='baz')
+        >>> s = S().query(foo='bar', bat__match='baz')
         >>> s = S().query(foo='bar', should=True)
         >>> s = S().query(foo='bar', should=True).query(baz='bat', must=True)
 
@@ -760,7 +799,11 @@ class S(PythonMixin):
         details on adding support for new filter types.
 
         """
-        return self._clone(next_step=('filter', list(filters) + kw.items()))
+        items = kw.items()
+        if six.PY3:
+            items = list(items)
+        return self._clone(
+            next_step=('filter', list(filters) + items))
 
     def filter_raw(self, filter_):
         """
@@ -793,8 +836,8 @@ class S(PythonMixin):
         Examples::
 
             q = (S().query(title='taco trucks',
-                           description__text='awesome')
-                    .boost(title=4.0, description__text=2.0))
+                           description__match='awesome')
+                    .boost(title=4.0, description__match=2.0))
 
 
         If the key is a field name, then the boost will apply to all
@@ -827,15 +870,15 @@ class S(PythonMixin):
         For example, if you had::
 
             qs = (S().boost(title=4.0, summary=2.0)
-                     .query(title__text=value,
-                            summary__text=value,
-                            content__text=value,
+                     .query(title__match=value,
+                            summary__match=value,
+                            content__match=value,
                             should=True))
 
 
-        ``title__text`` would be boosted twice as much as
-        ``summary__text`` and ``summary__text`` twice as much as
-        ``content__text``.
+        ``title__match`` would be boosted twice as much as
+        ``summary__match`` and ``summary__match`` twice as much as
+        ``content__match``.
 
         """
         new = self._clone()
@@ -849,10 +892,10 @@ class S(PythonMixin):
         You can demote documents that match query criteria::
 
             q = (S().query(title='trucks')
-                    .demote(0.5, description__text='gross'))
+                    .demote(0.5, description__match='gross'))
 
             q = (S().query(title='trucks')
-                    .demote(0.5, Q(description__text='gross')))
+                    .demote(0.5, Q(description__match='gross')))
 
         This is implemented using the boosting query in
         Elasticsearch. Anything you specify with ``.query()`` goes
@@ -877,7 +920,7 @@ class S(PythonMixin):
         """
         Return a new S instance with facet args combined with existing
         set.
-        
+
         :arg args: The list of facets to return.
 
         Additional keyword options:
@@ -892,7 +935,10 @@ class S(PythonMixin):
         Return a new S instance with raw facet args combined with
         existing set.
         """
-        return self._clone(next_step=('facet_raw', kw.items()))
+        items = kw.items()
+        if six.PY3:
+            items = list(items)
+        return self._clone(next_step=('facet_raw', items))
 
     def highlight(self, *fields, **kwargs):
         """Set highlight/excerpting with specified options.
@@ -905,24 +951,24 @@ class S(PythonMixin):
         * ``pre_tags`` -- List of tags before highlighted portion
         * ``post_tags`` -- List of tags after highlighted portion
 
-        Results will have a ``_highlight`` property which contains
-        the highlighted field excerpts.
+        Results will have a ``highlight`` attribute on the ``es_meta``
+        object which contains the highlighted field excerpts.
 
         For example::
 
-            q = (S().query(title__text='crash', content__text='crash')
+            q = (S().query(title__match='crash', content__match='crash')
                     .highlight('title', 'content'))
 
             for result in q:
-                print result._highlight['title']
-                print result._highlight['content']
+                print result.es_meta.highlight['title']
+                print result.es_meta.highlight['content']
 
 
         If you pass in ``None``, it will clear the highlight.
 
         For example, this search won't highlight anything::
 
-            q = (S().query(title__text='crash')
+            q = (S().query(title__match='crash')
                     .highlight('title')          # highlights 'title' field
                     .highlight(None))            # clears highlight
 
@@ -960,8 +1006,7 @@ class S(PythonMixin):
         return self._clone(next_step=('search_type', search_type))
 
     def suggest(self, name, term, **kwargs):
-        """
-        Set suggestion options.
+        """Set suggestion options.
 
         :arg name: The name to use for the suggestions.
         :arg term: The term to suggest similar looking terms for.
@@ -999,8 +1044,8 @@ class S(PythonMixin):
         return new
 
     def __getitem__(self, k):
+        """Handles slice and indexes for Elasticsearch results"""
         new = self._clone()
-        # TODO: validate numbers and ranges
         if isinstance(k, slice):
             new.start, new.stop = k.start or 0, k.stop
             return new
@@ -1008,10 +1053,17 @@ class S(PythonMixin):
             new.start, new.stop = k, k + 1
             return list(new)[0]
 
-    def _build_query(self):
-        """
-        Loop self.steps to build the query format that will be sent to
-        Elasticsearch, and return it as a dict.
+    def build_search(self):
+        """Builds the Elasticsearch search body represented by this S.
+
+        Loop over self.steps to build the search body that will be
+        sent to Elasticsearch. This returns a Python dict.
+
+        If you want the JSON that actually gets sent, then pass the return
+        value through :py:func:`elasticutils.utils.to_json`.
+
+        :returns: a Python dict
+
         """
         filters = []
         filters_raw = None
@@ -1029,11 +1081,12 @@ class S(PythonMixin):
         explain = False
         as_list = as_dict = False
         search_type = None
+
         for action, value in self.steps:
             if action == 'order_by':
                 sort = []
                 for key in value:
-                    if isinstance(key, basestring) and key.startswith('-'):
+                    if isinstance(key, string_types) and key.startswith('-'):
                         sort.append({key[1:]: 'desc'})
                     else:
                         sort.append(key)
@@ -1130,7 +1183,7 @@ class S(PythonMixin):
             # None as a shell, so if it's explicitly set to None, then
             # we update it.
             for facet in facets.values():
-                if facet.get('facet_filter', 1) is None:
+                if facet.get('facet_filter', 1) is None and 'filter' in qs:
                     facet['facet_filter'] = qs['filter']
 
         if facets_raw:
@@ -1150,7 +1203,7 @@ class S(PythonMixin):
         if explain:
             qs['explain'] = True
 
-        for suggestion, (term, kwargs) in suggestions.iteritems():
+        for suggestion, (term, kwargs) in six.iteritems(suggestions):
             qs.setdefault('suggest', {})[suggestion] = {
                 'text': term,
                 'term': {
@@ -1185,7 +1238,10 @@ class S(PythonMixin):
                     continue
 
             elif isinstance(f, dict):
-                key = f.keys()[0]
+                if six.PY2:
+                    key = f.keys()[0]
+                else:
+                    key = list(f.keys())[0]
                 val = f[key]
                 key = key.strip('_')
 
@@ -1241,7 +1297,7 @@ class S(PythonMixin):
         return rv
 
     def _process_query(self, query):
-        """Takes a key/val pair and returns ES JSON API"""
+        """Takes a key/val pair and returns the Elasticsearch code for it"""
         key, val = query
         field_name, field_action = split_field_action(key)
 
@@ -1392,7 +1448,7 @@ class S(PythonMixin):
 
         try:
             indexes = self.type.get_index()
-            if isinstance(indexes, basestring):
+            if isinstance(indexes, string_types):
                 indexes = [indexes]
             return indexes
         except (NotImplementedError, AttributeError):
@@ -1418,7 +1474,7 @@ class S(PythonMixin):
         Build query and passes to Elasticsearch, then returns the raw
         format returned.
         """
-        qs = self._build_query()
+        qs = self.build_search()
         es = self.get_es()
 
         index = self.get_indexes()
@@ -1442,66 +1498,70 @@ class S(PythonMixin):
 
     def count(self):
         """
-        Executes search and returns number of results as an integer.
+        Returns the total number of results Elasticsearch thinks will
+        match this search.
 
         :returns: integer
 
         For example:
 
-        >>> s = S().query(name__prefix='Jimmy')
-        >>> count = s.count()
+        >>> all_jimmies = S().query(name__prefix='Jimmy').count()
 
         """
-        if self._results_cache:
+        if self._results_cache is not None:
             return self._results_cache.count
         else:
             return self[:0].raw()['hits']['total']
 
     def __len__(self):
-        """
-        Executes search and returns the number of results you'd get.
+        """Executes search and returns the number of results you'd get.
 
-        Executes search and returns number of results as an integer.
+        Executes search and returns number of results returned as an
+        integer.
 
         :returns: integer
 
         For example:
 
-        >>> s = S().query(name__prefix='Jimmy')
-        >>> count = len(s)
-        >>> results = s().execute()
-        >>> count = len(results)
-        True
+        >>> some_s = S().query(name__prefix='Jimmy')
+        >>> length = len(some_s)
 
-        .. Note::
-
-           This is very different than calling ``.count()``. If you
-           call ``.count()`` you get the total number of results
-           that Elasticsearch thinks matches your search. If you call
-           ``len(s)``, then you get the number of results you'd get
-           if you executed the search. This factors in slices and
-           default from and size values.
+        This is very different than calling
+        :py:meth:`elasticutils.S.count`. If you call
+        :py:meth:`elasticutils.S.count` you get the total number of
+        results that Elasticsearch thinks matches your search. If you
+        call ``len()``, then you get the number of results you got
+        from the search which factors in slices and default from and
+        size values.
 
         """
         return len(self._do_search())
 
     def all(self):
+        """No-op that returns a clone of self
+
+        This is here to make it more Django QuerySet-like and work
+        with better with things that accept QuerySets.
+
         """
-        Executes search and returns ALL search results.
+        return self._clone()
+
+    def everything(self):
+        """Executes search and returns ALL search results.
 
         :returns: `SearchResults` instance
 
         For example:
 
         >>> s = S().query(name__prefix='Jimmy')
-        >>> all_results = s.all()
+        >>> all_results = s.everything()
 
         .. Warning::
 
-           This returns ALL search results. The way it does this is by
-           calling ``.count()`` first to figure out how many to return,
-           then by slicing by that size and returning a list of ALL
-           search results.
+           This returns ALL possible search results. The way it does
+           this is by calling ``.count()`` first to figure out how
+           many to return, then by slicing by that size and returning
+           ALL possible search results.
 
            Don't use this if you've got 1000s of results!
 
@@ -1668,7 +1728,7 @@ class MLT(PythonMixin):
         params = dict(self.query_params)
         mlt_fields = self.mlt_fields or params.pop('mlt_fields', [])
 
-        body = self.s._build_query() if self.s else ''
+        body = self.s.build_search() if self.s else ''
 
         hits = es.mlt(
             index=self.index, doc_type=self.doctype, id=self.id,
@@ -1711,7 +1771,7 @@ class SearchResults(object):
 
     Example::
 
-        s = S().query(bio__text='archaeologist')
+        s = S().query(bio__match='archaeologist')
         results = s.execute()
 
         # Shows how long the search took
@@ -1807,20 +1867,31 @@ class ObjectSearchResults(SearchResults):
         return self.objects.__iter__()
 
 
+class Metadata(object):
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
 def decorate_with_metadata(obj, result):
-    """Return obj decorated with result-scope metadata."""
-    # Elasticsearch id
+    """Return obj decorated with es_meta object"""
+    # Create es_meta object with Elasticsearch metadata about this
+    # search result
+    obj.es_meta = Metadata(
+        # Elasticsearch id
+        id=result.get('_id', 0),
+        # Source data
+        source=result.get('_source', {}),
+        # The search result score
+        score=result.get('_score', None),
+        # The document type
+        type=result.get('_type', None),
+        # Explanation of score
+        explanation=result.get('_explanation', {}),
+        # Highlight bits
+        highlight=result.get('highlight', {})
+    )
+    # Put the id on the object for convenience
     obj._id = result.get('_id', 0)
-    # Source data
-    obj._source = result.get('_source', {})
-    # The search result score
-    obj._score = result.get('_score')
-    # The document type
-    obj._type = result.get('_type')
-    # Explanation structure
-    obj._explanation = result.get('_explanation', {})
-    # Highlight bits
-    obj._highlight = result.get('highlight', {})
     return obj
 
 
@@ -1833,10 +1904,10 @@ class MappingType(object):
 
     To extend this class:
 
-    1. implement ``get_index``.
-    2. implement ``get_mapping_type_name``.
-    3. if this ties back to a model, implement ``get_model`` and
-       possibly also ``get_object``.
+    1. implement ``get_index()``.
+    2. implement ``get_mapping_type_name()``.
+    3. if this ties back to a model, implement ``get_model()`` and
+       possibly also ``get_object()``.
 
     For example::
 
@@ -1927,7 +1998,11 @@ class MappingType(object):
         """Return the model class related to this MappingType.
 
         This can be any class that has an instance related to this
-        Mappingtype by id.
+        MappingType by id.
+
+        For example, if you're using Django and your MappingType is
+        related to a Django model--this should return the Django
+        model.
 
         By default, raises NoModelError.
 
@@ -1945,7 +2020,7 @@ class MappingType(object):
             # We want instance/class attributes to take precedence.
             # So if something like that exists, we raise an
             # AttributeError and Python handles it.
-            raise AttributeError
+            raise AttributeError(name)
 
         if name == 'object':
             # 'object' is lazy-loading. We don't do this with a
@@ -1957,7 +2032,7 @@ class MappingType(object):
         if name in self._results_dict:
             return self._results_dict[name]
 
-        raise AttributeError
+        raise AttributeError(name)
 
     # Simulate read-only container access
 

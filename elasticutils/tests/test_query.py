@@ -8,6 +8,90 @@ from elasticutils import (
     InvalidFlagsError, SearchResults, DefaultMappingType, MappingType,
     DEFAULT_INDEXES, DEFAULT_DOCTYPES)
 from elasticutils.tests import ESTestCase, facet_counts_dict, require_version
+import six
+
+
+def eqish_(item1, item2):
+    """Compare two trees ignoring order of things in lists
+
+    Note: This is really goofy, but works for our specific purposes. If you
+    have other needs, you'll likely need to find a new solution here.
+
+    """
+    def _eqish(part1, part2):
+        if type(part1) != type(part2) or bool(part1) != bool(part2):
+            return False
+
+        if isinstance(part1, (tuple, list)):
+            # This is kind of awful, but what we need to do is make
+            # sure everything in the list part1 is in the list part2
+            # in an eqish way.
+            part2_left = list(part2)
+
+            for mem1 in part1:
+                for i, mem2 in enumerate(part2_left):
+                    if _eqish(mem1, mem2):
+                        del part2_left[i]
+                        break
+                else:
+                    return False
+            return True
+
+        elif isinstance(part1, dict):
+            if sorted(part1.keys()) != sorted(part2.keys()):
+                return False
+            for mem in part1.keys():
+                if not _eqish(part1[mem], part2[mem]):
+                    return False
+            return True
+
+        else:
+            return part1 == part2
+
+    if not _eqish(item1, item2):
+        raise AssertionError('{0} != {1}'.format(item1, item2))
+
+
+class TestEqish(TestCase):
+    def test_good(self):
+        eqish_('a', 'a')
+        eqish_(True, True)
+        eqish_(1, 1)
+        eqish_([1, 2, 3], [1, 2, 3])
+        eqish_([1, 2, 3], [3, 2, 1])
+        eqish_({'a': [1, 2, 3]},
+               {'a': [3, 2, 1]})
+        eqish_({'a': {'b': [1, 2, 3]}},
+               {'a': {'b': [3, 2, 1]}})
+        eqish_(
+            {
+                'filter': {
+                    'or': [
+                        {'term': {'foo': 'bar'}},
+                        {'or': [
+                            {'term': {'tag': 'boat'}},
+                            {'term': {'width': '5'}}
+                        ]}
+                    ]}
+            },
+            {
+                'filter': {
+                    'or': [
+                        {'or': [
+                            {'term': {'width': '5'}},
+                            {'term': {'tag': 'boat'}}
+                        ]},
+                        {'term': {'foo': 'bar'}}
+                    ]}
+            }
+        )
+
+
+    def test_bad(self):
+        self.assertRaises(AssertionError,
+                          lambda: eqish_({'a': [1, 2, 3]}, {'b': [1, 2, 3]}))
+        self.assertRaises(AssertionError,
+                          lambda: eqish_({'a': [1, 2, 3]}, {'a': [2, 3, 4]}))
 
 
 class FakeMappingType(MappingType):
@@ -38,51 +122,51 @@ class STest(TestCase):
 
 class QTest(TestCase):
     def test_q_should(self):
-        q = Q(foo__text='abc', bar__text='def', should=True)
-        eq_(sorted(q.should_q), [('bar__text', 'def'), ('foo__text', 'abc')])
+        q = Q(foo__match='abc', bar__match='def', should=True)
+        eq_(sorted(q.should_q), [('bar__match', 'def'), ('foo__match', 'abc')])
         eq_(sorted(q.must_q), [])
         eq_(sorted(q.must_not_q), [])
 
     def test_q_must(self):
-        q = Q(foo__text='abc', bar__text='def', must=True)
+        q = Q(foo__match='abc', bar__match='def', must=True)
         eq_(sorted(q.should_q), [])
-        eq_(sorted(q.must_q), [('bar__text', 'def'), ('foo__text', 'abc')])
+        eq_(sorted(q.must_q), [('bar__match', 'def'), ('foo__match', 'abc')])
         eq_(sorted(q.must_not_q), [])
 
     def test_q_must_not(self):
-        q = Q(foo__text='abc', bar__text='def', must_not=True)
+        q = Q(foo__match='abc', bar__match='def', must_not=True)
         eq_(sorted(q.should_q), [])
         eq_(sorted(q.must_q), [])
-        eq_(sorted(q.must_not_q), [('bar__text', 'def'), ('foo__text', 'abc')])
+        eq_(sorted(q.must_not_q), [('bar__match', 'def'), ('foo__match', 'abc')])
 
     def test_q_must_should(self):
         with self.assertRaises(InvalidFlagsError):
-            Q(foo__text='abc', must=True, should=True)
+            Q(foo__match='abc', must=True, should=True)
 
     def test_q_basic_add(self):
         """Adding one Q to another Q combines them."""
-        q = Q(foo__text='abc') + Q(bar__text='def')
+        q = Q(foo__match='abc') + Q(bar__match='def')
 
         eq_(sorted(q.should_q), [])
-        eq_(sorted(q.must_q), [('bar__text', 'def'), ('foo__text', 'abc')])
+        eq_(sorted(q.must_q), [('bar__match', 'def'), ('foo__match', 'abc')])
         eq_(sorted(q.must_not_q), [])
 
     def test_q_order(self):
-        q1 = Q(foo__text='abc') + Q(bar__text='def')
+        q1 = Q(foo__match='abc') + Q(bar__match='def')
 
-        q2 = Q(bar__text='def') + Q(foo__text='abc')
+        q2 = Q(bar__match='def') + Q(foo__match='abc')
         eq_(q1, q2)
 
-        q2 = Q(bar__text='def')
-        q2 += Q(foo__text='abc')
+        q2 = Q(bar__match='def')
+        q2 += Q(foo__match='abc')
         eq_(q1, q2)
 
-        q2 = Q(foo__text='abc')
-        q2 += Q(bar__text='def')
+        q2 = Q(foo__match='abc')
+        q2 += Q(bar__match='def')
         eq_(q1, q2)
 
     def test_q_mixed(self):
-        q1 = Q(foo__text='should', bar__text='should', should=True)
+        q1 = Q(foo__match='should', bar__match='should', should=True)
         q2 = Q(baz='must')
         q3 = Q(bat='must_not', must_not=True)
         q4 = Q(ban='must', must=True)
@@ -91,7 +175,7 @@ class QTest(TestCase):
         q_all = q1 + q2 + q3 + q4 + q5
 
         eq_(sorted(q_all.should_q),
-            [('bar__text', 'should'), ('foo__text', 'should')])
+            [('bar__match', 'should'), ('foo__match', 'should')])
 
         eq_(sorted(q_all.must_q),
             [('bam', 'must'), ('ban', 'must'), ('baz', 'must')])
@@ -190,11 +274,6 @@ class QueryTest(ESTestCase):
         eq_(len(self.get_s().query(height__range=(5, 7))
                             .boost(height__range=100)), 3)
 
-    def test_q_text(self):
-        eq_(len(self.get_s().query(foo__text='car')), 2)
-
-        eq_(len(self.get_s().query(Q(foo__text='car'))), 2)
-
     def test_q_match(self):
         eq_(len(self.get_s().query(foo__match='car')), 2)
 
@@ -202,31 +281,8 @@ class QueryTest(ESTestCase):
 
     def test_q_prefix(self):
         eq_(len(self.get_s().query(foo__prefix='ca')), 2)
-        eq_(len(self.get_s().query(foo__startswith='ca')), 2)
 
         eq_(len(self.get_s().query(Q(foo__prefix='ca'))), 2)
-        eq_(len(self.get_s().query(Q(foo__startswith='ca'))), 2)
-
-    def test_q_text_phrase(self):
-        # Doing a text query for the two words in either order kicks up
-        # two results.
-        eq_(len(self.get_s().query(foo__text='train car')), 2)
-        eq_(len(self.get_s().query(foo__text='car train')), 2)
-
-        eq_(len(self.get_s().query(Q(foo__text='train car'))), 2)
-        eq_(len(self.get_s().query(Q(foo__text='car train'))), 2)
-
-        # Doing a text_phrase query for the two words in the right order
-        # kicks up one result.
-        eq_(len(self.get_s().query(foo__text_phrase='train car')), 1)
-
-        eq_(len(self.get_s().query(Q(foo__text_phrase='train car'))), 1)
-
-        # Doing a text_phrase query for the two words in the wrong order
-        # kicks up no results.
-        eq_(len(self.get_s().query(foo__text_phrase='car train')), 0)
-
-        eq_(len(self.get_s().query(Q(foo__text_phrase='car train'))), 0)
 
     def test_q_match_phrase(self):
         # Doing a match query for the two words in either order kicks up
@@ -250,10 +306,10 @@ class QueryTest(ESTestCase):
         eq_(len(self.get_s().query(Q(foo__match_phrase='car train'))), 0)
 
     def test_q_fuzzy(self):
-        # Mispelled word gets no results with text query.
-        eq_(len(self.get_s().query(foo__text='tran')), 0)
+        # Mispelled word gets no results with match query.
+        eq_(len(self.get_s().query(foo__match='tran')), 0)
 
-        eq_(len(self.get_s().query(Q(foo__text='tran'))), 0)
+        eq_(len(self.get_s().query(Q(foo__match='tran'))), 0)
 
         # Mispelled word gets one result with fuzzy query.
         eq_(len(self.get_s().query(foo__fuzzy='tran')), 1)
@@ -268,22 +324,22 @@ class QueryTest(ESTestCase):
         eq_(len(self.get_s().query(Q(foo__wildcard='tra?n'))), 1)
 
     def test_q_demote(self):
-        s = self.get_s().query(foo__text='car')
-        scores = [(sr['id'], sr._score) for sr in s.values_dict('id')]
+        s = self.get_s().query(foo__match='car')
+        scores = [(sr['id'], sr.es_meta.score) for sr in s.values_dict('id')]
 
         s = s.demote(0.5, width__term='5')
-        demoted_scores = [(sr['id'], sr._score) for sr in s.values_dict('id')]
+        demoted_scores = [(sr['id'], sr.es_meta.score) for sr in s.values_dict('id')]
 
         # These are both sorted by scores. We're demoting one result
         # so the top result in each list is different.
         assert scores[0] != demoted_scores
 
         # Now we do the whole thing again with Qs.
-        s = self.get_s().query(Q(foo__text='car'))
-        scores = [(sr['id'], sr._score) for sr in s.values_dict('id')]
+        s = self.get_s().query(Q(foo__match='car'))
+        scores = [(sr['id'], sr.es_meta.score) for sr in s.values_dict('id')]
 
         s = s.demote(0.5, Q(width__term='5'))
-        demoted_scores = [(sr['id'], sr._score) for sr in s.values_dict('id')]
+        demoted_scores = [(sr['id'], sr.es_meta.score) for sr in s.values_dict('id')]
 
         # These are both sorted by scores. We're demoting one result
         # so the top result in each list is different.
@@ -310,7 +366,7 @@ class QueryTest(ESTestCase):
 
     def test_deprecated_q_or_(self):
         s = self.get_s().query(or_={'foo': 'car', 'tag': 'boat'})
-        eq_(s._build_query(),
+        eqish_(s.build_search(),
             {
                 'query': {
                     'bool': {
@@ -329,36 +385,36 @@ class QueryTest(ESTestCase):
 
     def test_query_raw(self):
         s = self.get_s().query_raw({'match': {'title': 'example'}})
-        eq_(s._build_query(),
+        eq_(s.build_search(),
             {'query': {'match': {'title': 'example'}}})
 
     def test_query_raw_overrides_everything(self):
         s = self.get_s().query_raw({'match': {'title': 'example'}})
-        s = s.query(foo__text='foo')
-        s = s.demote(0.5, title__text='bar')
+        s = s.query(foo__match='foo')
+        s = s.demote(0.5, title__match='bar')
         s = s.boost(title=5.0)
 
-        eq_(s._build_query(),
+        eq_(s.build_search(),
             {'query': {'match': {'title': 'example'}}})
 
     def test_boost(self):
         """Boosted queries shouldn't raise a SearchPhaseExecutionException."""
         q1 = (self.get_s()
                   .boost(foo=4.0)
-                  .query(foo='car', foo__text='car', foo__text_phrase='car'))
+                  .query(foo='car', foo__match='car', foo__match_phrase='car'))
 
         # Make sure the query executes without throwing an exception.
         list(q1)
 
         # Verify it's producing the correct query.
-        eq_(q1._build_query(),
+        eqish_(q1.build_search(),
             {
                 'query': {
                     'bool': {
                         'must': [
-                            {'text_phrase': {'foo': {'query': 'car', 'boost': 4.0}}},
+                            {'match_phrase': {'foo': {'query': 'car', 'boost': 4.0}}},
                             {'term': {'foo': {'value': 'car', 'boost': 4.0}}},
-                            {'text': {'foo': {'query': 'car', 'boost': 4.0}}}
+                            {'match': {'foo': {'query': 'car', 'boost': 4.0}}}
                         ]
                     }
                 }
@@ -367,20 +423,20 @@ class QueryTest(ESTestCase):
         # Do the same thing with Qs.
         q1 = (self.get_s()
                   .boost(foo=4.0)
-                  .query(Q(foo='car', foo__text='car', foo__text_phrase='car')))
+                  .query(Q(foo='car', foo__match='car', foo__match_phrase='car')))
 
         # Make sure the query executes without throwing an exception.
         list(q1)
 
         # Verify it's producing the correct query.
-        eq_(q1._build_query(),
+        eqish_(q1.build_search(),
             {
                 'query': {
                     'bool': {
                         'must': [
-                            {'text_phrase': {'foo': {'query': 'car', 'boost': 4.0}}},
+                            {'match_phrase': {'foo': {'query': 'car', 'boost': 4.0}}},
                             {'term': {'foo': {'value': 'car', 'boost': 4.0}}},
-                            {'text': {'foo': {'query': 'car', 'boost': 4.0}}}
+                            {'match': {'foo': {'query': 'car', 'boost': 4.0}}}
                         ]
                     }
                 }
@@ -393,20 +449,25 @@ class QueryTest(ESTestCase):
             # with a single key. So we extract that and put it in a
             # dict so we don't have to deal with the order of things
             # in the 'must' list.
-            return dict([clause.items()[0]
+            if six.PY2:
+                out = dict([clause.items()[0]
                          for clause in search['query']['bool']['must']])
+            else:
+                out = dict([list(clause.items())[0]
+                         for clause in search['query']['bool']['must']])
+            return out
 
         q1 = self.get_s().boost(foo=4.0).query(foo='car', foo__prefix='car')
-        eq_(_get_queries(q1._build_query())['term']['foo']['boost'], 4.0)
-        eq_(_get_queries(q1._build_query())['prefix']['foo']['boost'], 4.0)
+        eq_(_get_queries(q1.build_search())['term']['foo']['boost'], 4.0)
+        eq_(_get_queries(q1.build_search())['prefix']['foo']['boost'], 4.0)
 
         q1 = q1.boost(foo=2.0)
-        eq_(_get_queries(q1._build_query())['term']['foo']['boost'], 2.0)
-        eq_(_get_queries(q1._build_query())['prefix']['foo']['boost'], 2.0)
+        eq_(_get_queries(q1.build_search())['term']['foo']['boost'], 2.0)
+        eq_(_get_queries(q1.build_search())['prefix']['foo']['boost'], 2.0)
 
         q1 = q1.boost(foo__prefix=4.0)
-        eq_(_get_queries(q1._build_query())['term']['foo']['boost'], 2.0)
-        eq_(_get_queries(q1._build_query())['prefix']['foo']['boost'], 4.0)
+        eq_(_get_queries(q1.build_search())['term']['foo']['boost'], 2.0)
+        eq_(_get_queries(q1.build_search())['prefix']['foo']['boost'], 4.0)
 
         # Note: We don't actually want to test whether the score for
         # an item goes up by adding a boost to the search because
@@ -425,7 +486,7 @@ class QueryTest(ESTestCase):
 
         eq_((s.query(Q(foo='should', should=True),
                      bar='must')
-             ._build_query()),
+             .build_search()),
             {
                 'query': {
                     'bool': {
@@ -441,7 +502,7 @@ class QueryTest(ESTestCase):
 
         eq_((s.query(Q(foo='should', should=True),
                      bar='must_not', must_not=True)
-             ._build_query()),
+             .build_search()),
             {
                 'query': {
                     'bool': {
@@ -458,7 +519,7 @@ class QueryTest(ESTestCase):
         eq_((s.query(Q(foo='should', should=True),
                      bar='must_not', must_not=True)
              .query(Q(baz='must'))
-             ._build_query()),
+             .build_search()),
             {
                 'query': {
                     'bool': {
@@ -479,7 +540,7 @@ class QueryTest(ESTestCase):
         # foo term query and the must=True doesn't apply to
         # anything--it shouldn't override the should=True in the Q.
         eq_((s.query(Q(foo='should', should=True), must=True)
-             ._build_query()),
+             .build_search()),
             {
                 'query': {
                     'bool': {
@@ -497,7 +558,7 @@ class QueryTest(ESTestCase):
                 return {'funkyquery': {'field': key, 'value': val}}
 
         s = FunkyS().query(foo__funkyquery='bar')
-        eq_(s._build_query(),
+        eq_(s.build_search(),
             {
                 'query': {
                     'funkyquery': {'field': 'foo', 'value': 'bar'}
@@ -535,11 +596,27 @@ class QueryTest(ESTestCase):
         s.execute()
         assert isinstance(s.count(), int)
 
+    def test_count_empty_results(self):
+        s = self.get_s()
+        s.execute()
+
+        # Simulate a situation where the result cache had 0 objects
+        s._results_cache.objects = []
+        s._results_cache.count = 123
+
+        # Ensure that we are still retrieving the cached result count
+        eq_(s.count(), 123)
+
     def test_len(self):
         assert isinstance(len(self.get_s()), int)
 
     def test_all(self):
-        assert isinstance(self.get_s().all(), SearchResults)
+        assert isinstance(self.get_s().all(), S)
+
+    def test_everything(self):
+        ret = self.get_s().everything()
+        assert isinstance(ret, SearchResults)
+        eq_(len(ret), len(self.data))
 
     def test_order_by(self):
         res = self.get_s().filter(tag='awesome').order_by('-width')
@@ -551,36 +628,36 @@ class QueryTest(ESTestCase):
 
     def test_slice(self):
         s = self.get_s().filter(tag='awesome')
-        eq_(s._build_query(),
+        eq_(s.build_search(),
             {'filter': {'term': {'tag': 'awesome'}}})
         assert isinstance(s[0], DefaultMappingType)
 
-        eq_(s[0:1]._build_query(),
+        eq_(s[0:1].build_search(),
             {'filter': {'term': {'tag': 'awesome'}}, 'size': 1})
 
-        eq_(s[1:2]._build_query(),
+        eq_(s[1:2].build_search(),
             {'filter': {'term': {'tag': 'awesome'}}, 'from': 1, 'size': 1})
 
     def test_explain(self):
         qs = self.get_s().query(foo='car')
 
-        assert 'explain' not in qs._build_query()
+        assert 'explain' not in qs.build_search()
 
         qs = qs.explain(True)
 
         # You put the explain in...
-        assert qs._build_query()['explain'] == True
+        assert qs.build_search()['explain'] == True
 
         qs = qs.explain(False)
 
         # You take the explain out...
-        assert 'explain' not in qs._build_query()
+        assert 'explain' not in qs.build_search()
 
         # Shake it all about...
         qs = qs.explain(True)
 
         res = list(qs)
-        assert res[0]._explanation
+        assert res[0].es_meta.explanation
 
 
 class FilterTest(ESTestCase):
@@ -606,27 +683,27 @@ class FilterTest(ESTestCase):
 
     def test_filter_empty_f(self):
         s = self.get_s().filter(F())
-        eq_(s._build_query(), {})
+        eq_(s.build_search(), {})
         eq_(s.count(), 6)
 
     def test_filter_empty_f_or_f(self):
         s = self.get_s().filter(F() | F(tag='awesome'))
-        eq_(s._build_query(), {'filter': {'term': {'tag': 'awesome'}}})
+        eq_(s.build_search(), {'filter': {'term': {'tag': 'awesome'}}})
         eq_(s.count(), 3)
 
     def test_filter_empty_f_and_f(self):
         s = self.get_s().filter(F() & F(tag='awesome'))
-        eq_(s._build_query(), {'filter': {'term': {'tag': 'awesome'}}})
+        eq_(s.build_search(), {'filter': {'term': {'tag': 'awesome'}}})
         eq_(s.count(), 3)
 
     def test_filter_f_and_empty_f(self):
         s = self.get_s().filter(F(tag='awesome') & F())
-        eq_(s._build_query(), {'filter': {'term': {'tag': 'awesome'}}})
+        eq_(s.build_search(), {'filter': {'term': {'tag': 'awesome'}}})
         eq_(s.count(), 3)
 
     def test_filter_f_and_ff(self):
         s = self.get_s().filter(F(tag='awesome') & F(foo='car', width='7'))
-        eq_(s._build_query(),
+        eqish_(s.build_search(),
             {
                 'filter': {
                     'and': [
@@ -641,12 +718,12 @@ class FilterTest(ESTestCase):
 
     def test_filter_empty_f_or_empty_f_or_f(self):
         s = self.get_s().filter(F() | F() | F(tag='awesome'))
-        eq_(s._build_query(), {'filter': {'term': {'tag': 'awesome'}}})
+        eq_(s.build_search(), {'filter': {'term': {'tag': 'awesome'}}})
         eq_(s.count(), 3)
 
     def test_filter_empty_f_and_empty_f_and_f(self):
         s = self.get_s().filter(F() & F() & F(tag='awesome'))
-        eq_(s._build_query(), {'filter': {'term': {'tag': 'awesome'}}})
+        eq_(s.build_search(), {'filter': {'term': {'tag': 'awesome'}}})
         eq_(s.count(), 3)
 
     def test_filter_not_not_f(self):
@@ -654,12 +731,12 @@ class FilterTest(ESTestCase):
         f = ~f
         f = ~f
         s = self.get_s().filter(f)
-        eq_(s._build_query(), {'filter': {'term': {'tag': 'awesome'}}})
+        eq_(s.build_search(), {'filter': {'term': {'tag': 'awesome'}}})
         eq_(s.count(), 3)
 
     def test_filter_empty_f_not(self):
         s = self.get_s().filter(~F())
-        eq_(s._build_query(), {})
+        eq_(s.build_search(), {})
         eq_(s.count(), 6)
 
     def test_filter(self):
@@ -678,7 +755,7 @@ class FilterTest(ESTestCase):
     def test_filter_or_3(self):
         s = self.get_s().filter(F(tag='awesome') | F(tag='boat') |
                                 F(tag='boring'))
-        eq_(s._build_query(), {
+        eqish_(s.build_search(), {
                 'filter': {
                     'or': [
                         {'term': {'tag': 'awesome'}},
@@ -692,7 +769,7 @@ class FilterTest(ESTestCase):
         # This is kind of a crazy case.
         s = self.get_s().filter(or_={'foo': 'bar',
                                      'or_': {'tag': 'boat', 'width': '5'}})
-        eq_(s._build_query(), {
+        eqish_(s.build_search(), {
                 'filter': {
                     'or': [
                         {'or': [
@@ -711,7 +788,7 @@ class FilterTest(ESTestCase):
 
     def test_filter_not(self):
         s = self.get_s().filter(~F(tag='awesome'))
-        eq_(s._build_query(), {
+        eq_(s.build_search(), {
                 'filter': {
                     'not': {
                         'filter': {'term': {'tag': 'awesome'}}
@@ -721,7 +798,7 @@ class FilterTest(ESTestCase):
         eq_(s.count(), 3)
 
         s = self.get_s().filter(~(F(tag='boring') | F(tag='boat')))
-        eq_(s._build_query(), {
+        eqish_(s.build_search(), {
                 'filter': {
                     'not': {
                         'filter': {
@@ -736,7 +813,7 @@ class FilterTest(ESTestCase):
         eq_(s.count(), 4)
 
         s = self.get_s().filter(~F(tag='boat')).filter(~F(foo='bar'))
-        eq_(s._build_query(), {
+        eqish_(s.build_search(), {
                 'filter': {
                     'and': [
                         {'not': {'filter': {'term': {'tag': 'boat'}}}},
@@ -747,7 +824,7 @@ class FilterTest(ESTestCase):
         eq_(s.count(), 4)
 
         s = self.get_s().filter(~F(tag='boat', foo='barf'))
-        eq_(s._build_query(), {
+        eqish_(s.build_search(), {
                 'filter': {
                     'not': {
                         'filter': {
@@ -821,7 +898,7 @@ class FilterTest(ESTestCase):
                 return {'funkyfilter': {'field': key, 'value': val}}
 
         s = FunkyS().filter(foo__funkyfilter='bar')
-        eq_(s._build_query(), {
+        eq_(s.build_search(), {
                 'filter': {
                     'funkyfilter': {'field': 'foo', 'value': 'bar'}
                 }
@@ -840,20 +917,28 @@ class FilterTest(ESTestCase):
 
     def test_filter_raw(self):
         s = self.get_s().filter_raw({'term': {'tag': 'awesome'}})
-        eq_(s._build_query(),
+        eq_(s.build_search(),
             {'filter': {'term': {'tag': 'awesome'}}})
 
     def test_filter_raw_overrides_everything(self):
         s = self.get_s().filter_raw({'term': {'tag': 'awesome'}})
         s = s.filter(tag='boring')
         s = s.filter(F(tag='end'))
-        eq_(s._build_query(),
+        eq_(s.build_search(),
             {'filter': {'term': {'tag': 'awesome'}}})
 
 
 class FacetTest(ESTestCase):
+    def setUp(self):
+        super(FacetTest, self).setUp()
+        self.cleanup_index()
+        self.create_index()
+
+    def tearDown(self):
+        super(FacetTest, self).tearDown()
+        self.cleanup_index()
+
     def test_facet(self):
-        FacetTest.create_index()
         FacetTest.index_data([
                 {'id': 1, 'foo': 'bar', 'tag': 'awesome'},
                 {'id': 2, 'foo': 'bart', 'tag': 'boring'},
@@ -867,7 +952,6 @@ class FacetTest(ESTestCase):
         eq_(facet_counts_dict(qs, 'tag'), dict(awesome=3, boring=1, boat=1))
 
     def test_facet_with_size(self):
-        FacetTest.create_index()
         FacetTest.index_data([
                 {'id': 1, 'foo': 'bar', 'tag': 'awesome'},
                 {'id': 2, 'foo': 'bart', 'tag': 'boring'},
@@ -878,11 +962,13 @@ class FacetTest(ESTestCase):
             ])
         FacetTest.refresh()
 
-        qs = self.get_s().facet('tag', size=2)
-        eq_(facet_counts_dict(qs, 'tag'), dict(awesome=3, boat=2))
+        qs = self.get_s()
+        eq_(facet_counts_dict(qs.facet('tag'), 'tag'),
+            {u'boring': 1, u'awesome': 3, u'boat': 2})
+        eq_(facet_counts_dict(qs.facet('tag', size=2), 'tag'),
+            {u'awesome': 3, u'boat': 2})
 
     def test_filtered_facet(self):
-        FacetTest.create_index()
         FacetTest.index_data([
                 {'id': 1, 'foo': 'bar', 'tag': 'awesome', 'width': 1},
                 {'id': 2, 'foo': 'bart', 'tag': 'boring', 'width': 2},
@@ -902,8 +988,49 @@ class FacetTest(ESTestCase):
         eq_(facet_counts_dict(qs.facet('tag', filtered=True), 'tag'),
             {'awesome': 1})
 
+    def test_filtered_facet_with_size(self):
+        FacetTest.index_data([
+                {'id': 1, 'foo': 'bar', 'tag': 'awesome', 'width': 1},
+                {'id': 2, 'foo': 'bart', 'tag': 'boring', 'width': 2},
+                {'id': 3, 'foo': 'car', 'tag': 'awesome', 'width': 1},
+                {'id': 4, 'foo': 'duck', 'tag': 'boat', 'width': 5},
+                {'id': 5, 'foo': 'train car', 'tag': 'awesome', 'width': 5},
+                {'id': 6, 'foo': 'canoe', 'tag': 'boat', 'width': 5},
+                {'id': 7, 'foo': 'plane', 'tag': 'awesome', 'width': 5},
+                {'id': 8, 'foo': 'cargo plane', 'tag': 'boring', 'width': 5},
+            ])
+        FacetTest.refresh()
+
+        qs = self.get_s().filter(width=5)
+
+        # regular facet
+        eq_(facet_counts_dict(qs.facet('tag'), 'tag'),
+            {'boring': 2, 'awesome': 4, 'boat': 2})
+        # apply the filter
+        eq_(facet_counts_dict(qs.facet('tag', filtered=True), 'tag'),
+            {'boring': 1, 'awesome': 2, 'boat': 2})
+        # apply the filter and restrict the size
+        eq_(facet_counts_dict(qs.facet('tag', size=2, filtered=True), 'tag'),
+            {'awesome': 2, 'boat': 2})
+
+    def test_filtered_facet_no_filters(self):
+        FacetTest.index_data([
+                {'id': 1, 'foo': 'bar', 'tag': 'awesome', 'width': 1},
+                {'id': 2, 'foo': 'bart', 'tag': 'boring', 'width': 2},
+                {'id': 3, 'foo': 'car', 'tag': 'awesome', 'width': 1},
+                {'id': 4, 'foo': 'duck', 'tag': 'boat', 'width': 5},
+                {'id': 5, 'foo': 'train car', 'tag': 'awesome', 'width': 5},
+            ])
+        FacetTest.refresh()
+
+        qs = self.get_s().query(foo='car')
+
+        # filtered=True doesn't cause a KeyError when there are no
+        # filters
+        eq_(facet_counts_dict(qs.facet('tag', filtered=True), 'tag'),
+            {'awesome': 2})
+
     def test_global_facet(self):
-        FacetTest.create_index()
         FacetTest.index_data([
                 {'id': 1, 'foo': 'bar', 'tag': 'awesome'},
                 {'id': 2, 'foo': 'bart', 'tag': 'boring'},
@@ -924,7 +1051,6 @@ class FacetTest(ESTestCase):
             dict(awesome=3, boring=1, boat=1))
 
     def test_facet_raw(self):
-        FacetTest.create_index()
         FacetTest.index_data([
                 {'id': 1, 'foo': 'bar', 'tag': 'awesome'},
                 {'id': 2, 'foo': 'bart', 'tag': 'boring'},
@@ -946,7 +1072,6 @@ class FacetTest(ESTestCase):
 
     def test_facet_raw_overrides_facet(self):
         """facet_raw overrides facet with the same facet name."""
-        FacetTest.create_index()
         FacetTest.index_data([
                 {'id': 1, 'foo': 'bar', 'tag': 'awesome'},
                 {'id': 2, 'foo': 'bart', 'tag': 'boring'},
@@ -965,7 +1090,6 @@ class FacetTest(ESTestCase):
 
     def test_facet_terms(self):
         """Test terms facet"""
-        FacetTest.create_index()
         FacetTest.index_data([
                 {'id': 1, 'color': 'red'},
                 {'id': 2, 'color': 'red'},
@@ -989,18 +1113,69 @@ class FacetTest(ESTestCase):
         )
 
         data = qs.facet_counts()
-        eq_(data,
-            {
-                u'created1': [
-                    {u'count': 3, u'term': u'red'},
-                    {u'count': 2, u'term': u'yellow'}
-                ]
-            }
+        eq_(data["created1"].data,
+            [
+                {u'count': 3, u'term': u'red'},
+                {u'count': 2, u'term': u'yellow'}
+            ]
         )
+
+
+    def test_facet_terms_other(self):
+        """Test terms facet"""
+        FacetTest.index_data([
+                {'id': 1, 'color': 'red'},
+                {'id': 2, 'color': 'red'},
+                {'id': 3, 'color': 'red'},
+                {'id': 4, 'color': 'yellow'},
+                {'id': 5, 'color': 'yellow'},
+                {'id': 6, 'color': 'green'},
+                {'id': 7, 'color': 'blue'},
+                {'id': 8, 'color': 'white'},
+                {'id': 9, 'color': 'brown'},
+            ])
+        FacetTest.refresh()
+
+        qs = (self.get_s()
+              .facet_raw(created1={
+                    'terms': {
+                        'field': 'color',
+                        'size': 2
+                    }
+              })
+        )
+
+        data = qs.facet_counts()
+        eq_(data["created1"].other, 4)
+
+    def test_facet_terms_missing(self):
+        """Test terms facet"""
+        FacetTest.index_data([
+                {'id': 1, 'color': 'red'},
+                {'id': 2, 'color': 'red'},
+                {'id': 3, 'color': 'red'},
+                {'id': 4, 'color': 'yellow'},
+                {'id': 5, 'colors': 'yellow'},
+                {'id': 6, 'colors': 'green'},
+                {'id': 7, 'colors': 'blue'},
+                {'id': 8, 'colors': 'white'},
+                {'id': 9, 'colors': 'brown'},
+            ])
+        FacetTest.refresh()
+
+        qs = (self.get_s()
+              .facet_raw(created1={
+                    'terms': {
+                        'field': 'color'
+                    }
+              })
+        )
+
+        data = qs.facet_counts()
+        eq_(data["created1"].missing, 5)
 
     def test_facet_range(self):
         """Test range facet"""
-        FacetTest.create_index()
         FacetTest.index_data([
                 {'id': 1, 'value': 1},
                 {'id': 2, 'value': 1},
@@ -1016,33 +1191,29 @@ class FacetTest(ESTestCase):
 
         qs = (self.get_s()
               .facet_raw(created1={
-                    'range': {
-                        'field': 'value',
-                        'ranges': [
-                            {'from': 0, 'to': 5},
-                            {'from': 5, 'to': 20}
-                        ]
-                    }
-              }
-              )
+                  'range': {
+                      'field': 'value',
+                      'ranges': [
+                          {'from': 0, 'to': 5},
+                          {'from': 5, 'to': 20}
+                      ]
+                  }
+              })
         )
 
         data = qs.facet_counts()
-        eq_(data,
-            {
-                u'created1': [
-                    {u'count': 9, u'from': 0.0, u'min': 1.0, u'max': 4.0,
-                     u'to': 5.0, u'total_count': 9, u'total': 20.0,
-                     u'mean': 2.2222222222222223},
-                    {u'count': 0, u'from': 5.0, u'total_count': 0,
-                     u'to': 20.0, u'total': 0.0, u'mean': 0.0}
-                ]
-            }
+        eq_(data["created1"].data,
+            [
+                {u'count': 9, u'from': 0.0, u'min': 1.0, u'max': 4.0,
+                 u'to': 5.0, u'total_count': 9, u'total': 20.0,
+                 u'mean': 2.2222222222222223},
+                {u'count': 0, u'from': 5.0, u'total_count': 0,
+                 u'to': 20.0, u'total': 0.0, u'mean': 0.0}
+            ]
         )
 
     def test_facet_histogram(self):
         """Test histogram facet"""
-        FacetTest.create_index()
         FacetTest.index_data([
                 {'id': 1, 'value': 1},
                 {'id': 2, 'value': 1},
@@ -1064,20 +1235,17 @@ class FacetTest(ESTestCase):
                     }))
 
         data = qs.facet_counts()
-        eq_(data, {
-                u'created1': [
+        eq_(data["created1"].data, [
                     {u'key': 0, u'count': 3},
                     {u'key': 2, u'count': 5},
                     {u'key': 4, u'count': 1},
-                ]
-            })
+                ])
 
     def test_facet_date_histogram(self):
         """facet_raw with date_histogram works."""
         today = datetime.now()
         tomorrow = today + timedelta(days=1)
 
-        FacetTest.create_index()
         FacetTest.index_data([
                 {'id': 1, 'created': today},
                 {'id': 2, 'created': today},
@@ -1102,7 +1270,6 @@ class FacetTest(ESTestCase):
 
     def test_facet_statistical(self):
         """Test statistical facet"""
-        FacetTest.create_index()
         FacetTest.index_data([
                 {'id': 1, 'value': 1},
                 {'id': 2, 'value': 1},
@@ -1122,28 +1289,21 @@ class FacetTest(ESTestCase):
                         'field': 'value'
                     }
               })
-        )
-
+            )
         data = qs.facet_counts()
-        eq_(data,
-            {
-                u'created1': {
-                    u'count': 9,
-                    u'_type': u'statistical',
-                    u'min': 1.0,
-                    u'sum_of_squares': 54.0,
-                    u'max': 4.0,
-                    u'std_deviation': 1.0304020550550783,
-                    u'variance': 1.0617283950617287,
-                    u'total': 20.0,
-                    u'mean': 2.2222222222222223
-                }
-            }
-        )
+        stat = data['created1']
+        eq_(stat.count, 9)
+        eq_(stat._type, u'statistical')
+        eq_(stat.min, 1.0)
+        eq_(stat.sum_of_squares, 54.0)
+        eq_(stat.max, 4.0)
+        eq_(stat.std_deviation, 1.0304020550550783)
+        eq_(stat.variance, 1.0617283950617287)
+        eq_(stat.total, 20.0)
+        eq_(stat.mean, 2.2222222222222223)
 
     def test_filter_facet(self):
         """Test filter facet"""
-        FacetTest.create_index()
         FacetTest.index_data([
             {'id': 1, 'color': 'red'},
             {'id': 2, 'color': 'red'},
@@ -1168,11 +1328,11 @@ class FacetTest(ESTestCase):
         qs = (self.get_s().facet_raw(red_or_yellow=red_or_yellow_filter))
 
         data = qs.facet_counts()
-        eq_(data, {'red_or_yellow': {u'_type': 'filter', u'count': 5}})
+        eq_(data['red_or_yellow']._type, 'filter')
+        eq_(data['red_or_yellow'].count, 5)
 
     def test_query_facet(self):
         """Test query facet"""
-        FacetTest.create_index()
         FacetTest.index_data([
             {'id': 1, 'color': 'red'},
             {'id': 2, 'color': 'red'},
@@ -1194,11 +1354,12 @@ class FacetTest(ESTestCase):
         qs = (self.get_s().facet_raw(red_query=red_query))
 
         data = qs.facet_counts()
-        eq_(data, {'red_query': {u'_type': 'query', u'count': 3}})
+
+        eq_(data['red_query']._type, 'query')
+        eq_(data['red_query'].count, 3)
 
     def test_invalid_field_type(self):
         """Invalid _type should raise InvalidFacetType."""
-        FacetTest.create_index()
         FacetTest.index_data([
                 {'id': 1, 'age': 30},
                 {'id': 2, 'age': 40}
@@ -1218,21 +1379,13 @@ class FacetTest(ESTestCase):
 
 
 class HighlightTest(ESTestCase):
-    @classmethod
-    def setup_class(cls):
-        super(HighlightTest, cls).setup_class()
-        if cls.skip_tests:
-            return
-
-        cls.create_index()
-        cls.index_data([
-                {'id': 1, 'foo': 'bar', 'tag': 'awesome', 'width': '2'},
-                {'id': 2, 'foo': 'bart', 'tag': 'boring', 'width': '7'},
-                {'id': 3, 'foo': 'car', 'tag': 'awesome', 'width': '5'},
-                {'id': 4, 'foo': 'duck', 'tag': 'boat', 'width': '11'},
-                {'id': 5, 'foo': 'train car', 'tag': 'awesome', 'width': '7'}
-            ])
-        cls.refresh()
+    data = [
+        {'id': 1, 'foo': 'bar', 'tag': 'awesome', 'width': '2'},
+        {'id': 2, 'foo': 'bart', 'tag': 'boring', 'width': '7'},
+        {'id': 3, 'foo': 'car', 'tag': 'awesome', 'width': '5'},
+        {'id': 4, 'foo': 'duck', 'tag': 'boat', 'width': '11'},
+        {'id': 5, 'foo': 'train car', 'tag': 'awesome', 'width': '7'}
+    ]
 
     def test_highlight_with_dict_results(self):
         """Make sure highlighting with dict-style results works.
@@ -1241,22 +1394,22 @@ class HighlightTest(ESTestCase):
         call, not just the ones mentioned in the query or in ``values_dict()``.
 
         """
-        s = (self.get_s().query(foo__text='car')
+        s = (self.get_s().query(foo__match='car')
                          .filter(id=5)
                          .highlight('tag', 'foo'))
         result = list(s)[0]
         # The highlit text from the foo field should be in index 1 of the
         # excerpts.
-        eq_(result._highlight['foo'], [u'train <em>car</em>'])
+        eq_(result.es_meta.highlight['foo'], [u'train <em>car</em>'])
 
-        s = (self.get_s().query(foo__text='car')
+        s = (self.get_s().query(foo__match='car')
                          .filter(id=5)
                          .highlight('tag', 'foo')
                          .values_dict('tag', 'foo'))
         result = list(s)[0]
         # The highlit text from the foo field should be in index 1 of the
         # excerpts.
-        eq_(result._highlight['foo'], [u'train <em>car</em>'])
+        eq_(result.es_meta.highlight['foo'], [u'train <em>car</em>'])
 
     def test_highlight_on_list_results(self):
         """Make sure highlighting with list-style results works.
@@ -1265,18 +1418,18 @@ class HighlightTest(ESTestCase):
         call, not just the ones mentioned in the query or in ``values_list()``.
 
         """
-        s = (self.get_s().query(foo__text='car')
+        s = (self.get_s().query(foo__match='car')
                          .filter(id=5)
                          .highlight('tag', 'foo')
                          .values_list('tag', 'foo'))
         result = list(s)[0]
         # The highlit text from the foo field should be in index 1 of the
         # excerpts.
-        eq_(result._highlight['foo'], [u'train <em>car</em>'])
+        eq_(result.es_meta.highlight['foo'], [u'train <em>car</em>'])
 
     def test_highlight_options(self):
         """Make sure highlighting with options works."""
-        s = (self.get_s().query(foo__text='car')
+        s = (self.get_s().query(foo__match='car')
                          .filter(id=5)
                          .highlight('tag', 'foo',
                                     pre_tags=['<b>'],
@@ -1284,23 +1437,23 @@ class HighlightTest(ESTestCase):
         result = list(s)[0]
         # The highlit text from the foo field should be in index 1 of the
         # excerpts.
-        eq_(result._highlight['foo'], [u'train <b>car</b>'])
+        eq_(result.es_meta.highlight['foo'], [u'train <b>car</b>'])
 
     def test_highlight_cumulative(self):
         """Make sure highlighting fields are cumulative and none clears them."""
         # No highlighted fields means no highlights.
-        s = (self.get_s().query(foo__text='car')
+        s = (self.get_s().query(foo__match='car')
                          .filter(id=5)
                          .highlight())
-        eq_(list(s)[0]._highlight, {})
+        eq_(list(s)[0].es_meta.highlight, {})
 
         # Add a field and that gets highlighted.
         s = s.highlight('foo')
-        eq_(list(s)[0]._highlight['foo'], [u'train <em>car</em>'])
+        eq_(list(s)[0].es_meta.highlight['foo'], [u'train <em>car</em>'])
 
         # Set it back to no fields and no highlight.
         s = s.highlight(None)
-        eq_(list(s)[0]._highlight, {})
+        eq_(list(s)[0].es_meta.highlight, {})
 
 
 class SearchTypeTest(ESTestCase):
@@ -1324,8 +1477,7 @@ class SearchTypeTest(ESTestCase):
     @classmethod
     def setup_class(cls):
         super(SearchTypeTest, cls).setup_class()
-        if cls.skip_tests:
-            return
+        cls.cleanup_index()
 
         # Explicitly create an index with 2 shards. The default
         # ES configuration is 5 shards, and should work as well,
@@ -1350,21 +1502,13 @@ class SearchTypeTest(ESTestCase):
 
 
 class SuggestionTest(ESTestCase):
-    @classmethod
-    def setup_class(cls):
-        super(SuggestionTest, cls).setup_class()
-        if cls.skip_tests:
-            return
-
-        cls.create_index()
-        cls.index_data([
-                {'id': 1, 'name': 'bar'},
-                {'id': 2, 'name': 'mark', 'location': 'mart'},
-                {'id': 3, 'name': 'car'},
-                {'id': 4, 'name': 'duck'},
-                {'id': 5, 'name': 'train car'}
-            ])
-        cls.refresh()
+    data = [
+        {'id': 1, 'name': 'bar'},
+        {'id': 2, 'name': 'mark', 'location': 'mart'},
+        {'id': 3, 'name': 'car'},
+        {'id': 4, 'name': 'duck'},
+        {'id': 5, 'name': 'train car'}
+    ]
 
     @require_version('0.90')
     def test_suggestions(self):
@@ -1374,13 +1518,13 @@ class SuggestionTest(ESTestCase):
         different fields.
 
         """
-        s = (self.get_s().query(name__text='mary')
+        s = (self.get_s().query(name__match='mary')
                          .suggest('mysuggest', 'mary'))
         suggestions = s.suggestions()
         options = [o['text'] for o in suggestions['mysuggest'][0]['options']]
         eq_(options, ['mark', 'mart'])
 
-        s = (self.get_s().query(name__text='mary')
+        s = (self.get_s().query(name__match='mary')
                          .suggest('mysuggest', 'mary', field='name'))
         suggestions = s.suggestions()
         options = [o['text'] for o in suggestions['mysuggest'][0]['options']]

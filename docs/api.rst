@@ -144,3 +144,20 @@ The MLT class
    .. automethod:: elasticutils.MLT.__init__
 
    .. automethod:: elasticutils.MLT.to_python
+
+
+The ESTestCase class
+====================
+
+.. autoclass:: elasticutils.estestcase.ESTestCase
+   :members:
+
+
+Helper utilites
+===============
+
+.. autofunction:: elasticutils.utils.chunked
+
+.. autofunction:: elasticutils.utils.format_explanation
+
+.. autofunction:: elasticutils.utils.to_json

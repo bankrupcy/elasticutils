@@ -6,8 +6,31 @@ What's new in ElasticUtils
    :local:
 
 
-Version 0.9: In development
-===========================
+Version 0.10: In development
+============================
+
+**API-breaking changes:**
+
+* Removed ``text`` and ``text_phrase`` queries. They're renamed
+  in Elasticsearch to ``match`` and ``match_phrase``.
+
+* Removed ``startswith`` query. Replace uses of it with ``prefix``.
+
+**Changes:**
+
+* Python 3 support (Python >= 3.3)
+
+
+Version 0.9.1: April 7th, 2014
+==============================
+
+**Changes:**
+
+* **Fixed bug with facets that are both sized and filtered**
+
+
+Version 0.9: April 3rd, 2014
+============================
 
 .. Note::
 
@@ -20,11 +43,24 @@ Version 0.9: In development
    stay with v0.8.
 
 
+.. Note::
+
+   This version supports Elasticsearch 0.20 through 0.90. It does not
+   yet support Elasticsearch 1.0. Support for 1.0 and later will be in
+   a later version of ElasticUtils.
+
+
 **API-breaking changes:**
 
-* **elasticsearch-py v0.4.3 or later now required.**
+* **elasticsearch-py >= v0.4.3 and < 1.0 required.**
 
   ElasticUtils now uses elasticsearch-py.
+
+  .. Note::
+
+     You have to use elasticsearch-py >= v0.4.3 and < 1.0. ElasticUtils
+     does not support elasticsearch-py 1.0. Support for later versions
+     will come in a future ElasticUtils release.
 
 * **pyelasticsearch no longer needed**
 
@@ -37,30 +73,85 @@ Version 0.9: In development
 
 * **pyelasticsearch -> elasticsearch-py changes.**
 
-  If you called ``.get_es()`` and got a pyelasticsearch `ElasticSearch`
-  object and did things with that (create index, create mappings, delete
-  indexes, indexing, cluster health, ...), you're going to need to make
-  some changes.
+  If you called ``elasticutils.get_es()`` and got a pyelasticsearch
+  `ElasticSearch` object and did things with that (create index, create
+  mappings, delete indexes, indexing, cluster health, ...), you're going
+  to need to make some changes.
 
   You can either:
 
   1. rewrite that code to use elasticsearch-py `Elasticsearch`
      equivalents, or
 
-  2. write and use your own ``get_es()`` function that returns
-     a pyelasticsearch `ElasticSearch` object
+  2. write a different function that returns a pyelasticsearch `ElasticSearch`
+     object and use that
 
   Rewriting shouldn't be too hard. The `elasticsearcy-py documentation
   <https://elasticsearch-py.readthedocs.org/en/latest/>`_ is pretty good
   and for most things, there's a 1-to-1 translation. Also, in many cases
   it's cleaner, so you'll probably be removing code.
 
+* **S.all() no longer returns all results**
+
+  If you were using `S.all()` to return all search results, you should
+  change it to `S.everything()`.
+
+* **`S._build_query()` was changed to `S.build_search()`**
+
+  This makes the method public and also changes the name and documentation
+  to be more correct.
+
+  If you really need a `S._build_query()`, add it to your `S` subclass.
+
+* **Search results metadata is now in the `es_meta` object**
+
+  Previously, you would access search results metadata like this::
+
+      obj._id
+      obj._highlight
+      obj._score
+
+      etc.
+
+
+  In order to make those accessible in Django templates, we moved them into
+  an es_meta object. You can now access them like this::
+
+      obj.es_meta.id
+      obj.es_meta.highlight
+      obj.es_meta.score
+
+      etc.
+
 
 **Changes:**
+
+* **added S.everything() which does what S.all() did**
 
 * **index_objects celery task can now take es and index args**
 
 * **unindex_objects celery task can now take es and index args**
+
+* **added S.suggestions() support**
+
+* **added S.query_and_fetch() support**
+
+* **added S.search_type()**
+
+* **S.facet() can now take a size keyword argument**
+
+* **S.facet_couts() now returns a dict of FacetResults objects**
+
+  The FacetResults object contains all the data we get back
+  from that section in the Elasticsearch response.
+
+* **SearchResults now has facet data in facets property**
+
+* **elasticutils.estestcase.ESTestCase available and cleaned up**
+
+  Previously, it was in ``elasticutils/tests/__init__.py``. This
+  makes it so everyone can use the same TestCase subclass we're
+  using for our tests.
 
 
 Version 0.8.2: January 6th, 2014
